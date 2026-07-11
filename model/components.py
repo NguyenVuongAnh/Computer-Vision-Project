@@ -1,7 +1,18 @@
+"""
+File usage for: model/components.py
+This file contains various building blocks and components for constructing neural network models.
+These components include standard convolutional layers, attention mechanisms, and custom-designed modules
+for specific computer vision tasks.
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 class ConvBNReLU(nn.Module):
+    """
+    A standard convolutional block consisting of a 2D convolution,
+    batch normalization, and a GELU activation function.
+    """
     def __init__(self, n_channels, out_ch, k=3, stride=1, padding=None, groups=1):
         super().__init__()
         if padding is None:
@@ -10,9 +21,17 @@ class ConvBNReLU(nn.Module):
         self.bn = nn.BatchNorm2d(out_ch)
         self.act = nn.GELU()
     def forward(self, x):
+        """
+        Forward pass for the ConvBNReLU block.
+        """
         return self.act(self.bn(self.conv(x)))
 
 class DepthwiseSeparable(nn.Module):
+    """
+    A depthwise separable convolution block, which is more efficient
+    than a standard convolution. It consists of a depthwise convolution
+    followed by a pointwise convolution.
+    """
     def __init__(self, n_channels, out_ch, k=3, stride=1):
         super().__init__()
         pad = (k-1)//2
@@ -21,6 +40,9 @@ class DepthwiseSeparable(nn.Module):
         self.bn = nn.BatchNorm2d(out_ch)
         self.act = nn.GELU()
     def forward(self, x):
+        """
+        Forward pass for the DepthwiseSeparable block.
+        """
         x = self.dw(x)
         x = self.pw(x)
         x = self.bn(x)
@@ -29,6 +51,10 @@ class DepthwiseSeparable(nn.Module):
 
 # Polarized Self-Attention (PSA)
 class PolarizedSelfAttention(nn.Module):
+    """
+    Implementation of Polarized Self-Attention (PSA), which combines
+    channel and spatial attention mechanisms.
+    """
     def __init__(self, channels, reduction=4):
         super().__init__()
         self.channels = channels
@@ -45,12 +71,18 @@ class PolarizedSelfAttention(nn.Module):
         self.spatial_sigmoid = nn.Sigmoid()
     
     def channel_attention(self, x):
+        """
+        Computes channel attention for the input tensor.
+        """
         b, c, _, _ = x.size()
         y = self.channel_pool(x).view(b, c)
         y = self.channel_fc(y).view(b, c, 1, 1)
         return x * y
     
     def spatial_attention(self, x):
+        """
+        Computes spatial attention for the input tensor.
+        """
         avg_out = torch.mean(x, dim=1, keepdim=True)
         max_out, _ = torch.max(x, dim=1, keepdim=True)
         y = torch.cat([avg_out, max_out], dim=1)
@@ -59,6 +91,9 @@ class PolarizedSelfAttention(nn.Module):
         return x * y
     
     def forward(self, x):
+        """
+        Forward pass for the PolarizedSelfAttention block.
+        """
         x = self.channel_attention(x)
         x = self.spatial_attention(x)
         return x
@@ -66,6 +101,10 @@ class PolarizedSelfAttention(nn.Module):
 
 # Mobile Attention Convolution (MAC)
 class MAC(nn.Module):
+    """
+    Mobile Attention Convolution (MAC) block, which combines an
+    inverted residual structure with a Polarized Self-Attention module.
+    """
     def __init__(self, n_channels, out_ch, expansion=4):
         super().__init__()
         hidden_dim = n_channels * expansion
@@ -85,6 +124,9 @@ class MAC(nn.Module):
         self.use_residual = (n_channels == out_ch)
     
     def forward(self, x):
+        """
+        Forward pass for the MAC block.
+        """
         identity = x
         
         x = self.expand(x)
@@ -108,6 +150,10 @@ class MAC(nn.Module):
 
 # Multi-scale Large-kernel Dual Attention (MLDA)
 class MLDA(nn.Module):
+    """
+    Multi-scale Large-kernel Dual Attention (MLDA) block, which
+    captures features at multiple scales using different kernel sizes.
+    """
     def __init__(self, channels):
         super().__init__()
         self.channels = channels
@@ -147,6 +193,9 @@ class MLDA(nn.Module):
         self.final_conv = nn.Conv2d(channels, channels, 1, bias=False)
         
     def forward(self, x):
+        """
+        Forward pass for the MLDA block.
+        """
         local = self.local_conv(x)
         local = self.local_bn(local)
         
@@ -168,6 +217,10 @@ class MLDA(nn.Module):
 
 # Mobile Multi-scale Attention Convolution (MMAC)
 class MMAC(nn.Module):
+    """
+    Mobile Multi-scale Attention Convolution (MMAC) block, which
+    combines MAC and MLDA blocks.
+    """
     def __init__(self, n_channels, out_ch):
         super().__init__()
         self.mac1 = MAC(n_channels, out_ch)
@@ -175,6 +228,9 @@ class MMAC(nn.Module):
         self.mlda = MLDA(out_ch)
         
     def forward(self, x):
+        """
+        Forward pass for the MMAC block.
+        """
         x = self.mac1(x)
         x = self.mac2(x)
         x = self.mlda(x)
@@ -184,11 +240,17 @@ class MMAC(nn.Module):
 class ResizeOp(nn.Module):
     """Learnable resize operation with projection to target channels"""
     def __init__(self, n_channels, out_ch, mode='up'):
+        """
+        Initializes the ResizeOp module.
+        """
         super().__init__()
         self.mode = mode
         self.conv = nn.Conv2d(n_channels, out_ch, 1, bias=False)
         
     def forward(self, x):
+        """
+        Forward pass for the ResizeOp module.
+        """
         x = self.conv(x)
         if self.mode == 'up':
             return F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=False)
@@ -197,7 +259,8 @@ class ResizeOp(nn.Module):
 
 class CPCFModule(nn.Module):
     """
-    Fixed CPCF module with proper channel projection
+    Fixed CPCF module with proper channel projection. This module
+    fuses features from different stages of the network.
     """
     def __init__(self, target_channels, stage, f1_ch, f2_ch, f3_ch, f4_ch):
         super().__init__()
@@ -218,6 +281,9 @@ class CPCFModule(nn.Module):
         self.att = MLDA(target_channels)
         
     def forward(self, f1, f2, f3, f4):
+        """
+        Forward pass for the CPCFModule.
+        """
         # Project all features to target channel dimension
         f1_p = self.proj1(f1)
         f2_p = self.proj2(f2)
@@ -247,6 +313,10 @@ class CPCFModule(nn.Module):
         return m
 
 class ClsHead(nn.Module):
+    """
+    A classification head that takes features from multiple levels of
+    the network and produces a final classification output.
+    """
     def __init__(
         self,
         f3_channels,
@@ -280,7 +350,9 @@ class ClsHead(nn.Module):
 
 
     def forward(self, f3, f4, f5):
-
+        """
+        Forward pass for the classification head.
+        """
         f3 = self.pool(f3)
         f4 = self.pool(f4)
         f5 = self.pool(f5)
