@@ -1,3 +1,0 @@
-LESION_CLASSES = ["EX", "HE", "MA", "OD", "SE"]
-
-SEG_THRESHOLDS = [0.5, 0.5, 0.5, 0.5, 0.5]
