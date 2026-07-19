@@ -9,10 +9,7 @@ __pycache__/
 *.dll
 
 # Virtual environments
-venv/
-.venv/
 env/
-ENV/
 
 # Environment variables
 .env
@@ -62,7 +59,3 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
-
-# Local database
-*.db
-*.sqlite

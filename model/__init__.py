@@ -9,7 +9,6 @@ and model summary information.
 from .predict import Predictor
 from .feature_map import FeatureMapExtractor
 from .gradcam import GradCAM
-from .summary import ModelSummary
 
 __all__ = [
     "Predictor",
