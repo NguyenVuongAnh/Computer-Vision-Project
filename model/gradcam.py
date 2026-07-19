@@ -1,169 +1,90 @@
-"""
-Grad-CAM visualization module for TensorFlow/Keras models.
-
-This module provides the GradCAM class for generating Class Activation Maps
-using Gradient-weighted Class Activation Mapping (Grad-CAM).
-"""
-
 import numpy as np
 import tensorflow as tf
 from typing import Optional
 
 
 class GradCAM:
-    """
-    A class for generating Grad-CAM heatmaps for Keras models.
 
-    This class implements the Grad-CAM algorithm to visualize which parts
-    of an image the model is focusing on for a particular class prediction.
 
-    Attributes:
-        model (tf.keras.Model): The Keras model to generate Grad-CAM for.
-    """
-
-    def __init__(self, model: tf.keras.Model) -> None:
-        """
-        Initialize the GradCAM with a Keras model.
-
-        Args:
-            model: A Keras model instance to generate Grad-CAM for.
-
-        Raises:
-            TypeError: If the provided model is not a Keras Model instance.
-        """
+    def __init__(self, model: tf.keras.Model):
         if not isinstance(model, tf.keras.Model):
-            raise TypeError(
-                f"Expected model to be a tf.keras.Model instance, "
-                f"got {type(model).__name__}"
-            )
+            raise TypeError("model must be tf.keras.Model")
         self.model = model
+        self.grad_models = {}
 
-    def generate(
-        self,
-        image: np.ndarray,
-        layer_name: str,
-        target_class: Optional[int] = None
-    ) -> np.ndarray:
-        """
-        Generate Grad-CAM heatmap for a specified layer and class.
+    def list_layers(self):
+        return [
+            layer.name
+            for layer in self.model.layers
+        ]
 
-        Args:
-            image: Input image as a NumPy array with shape (height, width, channels).
-            layer_name: Name of the convolutional layer to use for Grad-CAM.
-            target_class: Target class index for Grad-CAM. If None, uses the
-                predicted class (argmax of model output).
+    def show_layers(self):
+        print(
+            f"{'Index':<8}"
+            f"{'Layer Name':<35}"
+            f"{'Type':<25}"
+            f"Output Shape"
+        )
+        print("-"*100)
 
-        Returns:
-            np.ndarray: Grad-CAM heatmap as a NumPy array with shape
-                (height, width), normalized to [0, 1].
+        for i, layer in enumerate(self.model.layers):
+            print(
+                f"{i:<8}"
+                f"{layer.name:<35}"
+                f"{layer.__class__.__name__:<25}"
+                f"{layer.output.shape}"
+            )
 
-        Raises:
-            TypeError: If image is not a NumPy array.
-            ValueError: If image has invalid shape or dimensions.
-            ValueError: If the specified layer name does not exist in the model.
-        """
+    def generate(self, image: np.ndarray, layer_name: str, target_class: Optional[int] = None):
         if not isinstance(image, np.ndarray):
-            raise TypeError(
-                f"Expected image to be a np.ndarray, got {type(image).__name__}"
-            )
-
-        # Validate input dimensions
-        if image.ndim not in [3, 4]:
-            raise ValueError(
-                f"Expected image to have 3 or 4 dimensions (HWC or BHWC), "
-                f"got {image.ndim} dimensions with shape {image.shape}"
-            )
-
-        # Store original image size for resizing
+            raise TypeError("image must be numpy array")
         if image.ndim == 3:
-            original_height, original_width = image.shape[:2]
-            image_batch = np.expand_dims(image, axis=0)
+            h,w = image.shape[:2]
+            image = np.expand_dims(image, axis=0)
+        elif image.ndim == 4:
+            h,w = image.shape[1:3]
         else:
-            original_height, original_width = image.shape[1:3]
-            image_batch = image
+            raise ValueError(f"Invalid image shape {image.shape}")
 
-        # Convert to TensorFlow tensor for GradientTape
-        image_batch = tf.convert_to_tensor(image_batch, dtype=tf.float32)
-
-        # Check if layer exists
-        layer_names = [layer.name for layer in self.model.layers]
-        if layer_name not in layer_names:
+        layer = self.model.get_layer(layer_name)
+        # check feature map
+        if len(layer.output.shape) != 4:
             raise ValueError(
-                f"Layer '{layer_name}' not found in model. "
-                f"Available layers: {layer_names}"
+                f"Layer {layer_name} is not convolutional feature map: "
+                f"{layer.output.shape}"
             )
 
-        # Get the target layer
-        target_layer = self.model.get_layer(layer_name)
+        # cache grad model
+        if layer_name not in self.grad_models:
+            self.grad_models[layer_name] = tf.keras.Model(
+                inputs=self.model.input,
+                outputs=[
+                    layer.output,
+                    self.model.output
+                ]
+            )
+        grad_model = self.grad_models[layer_name]
+        image_tensor = tf.cast(image, tf.float32)
 
-        # Create a model that outputs both the target layer activations
-        # and the final predictions
-        grad_model = tf.keras.Model(
-            inputs=self.model.input,
-            outputs=[target_layer.output, self.model.output]
-        )
-
-        # Use GradientTape to compute gradients
         with tf.GradientTape() as tape:
-            # Watch the input image
-            tape.watch(image_batch)
-            # Forward pass to get layer output and predictions
-            conv_outputs, predictions = grad_model(image_batch)
-
-            # Determine target class if not provided
+            conv_output, prediction = grad_model(image_tensor)
             if target_class is None:
-                target_class = int(tf.argmax(predictions[0]))
+                target_class = int(tf.argmax(prediction[0]))
+            loss = prediction[:, target_class]
+        gradients = tape.gradient(loss, conv_output)
 
-            # Get the score for the target class
-            target_score = predictions[:, target_class]
+        # channel importance
+        weights = tf.reduce_mean(gradients, axis=(1,2))
+        weights = weights[0]
 
-        # Compute gradients of the target class score with respect to
-        # the convolutional layer output
-        grads = tape.gradient(target_score, conv_outputs)
+        conv_output = conv_output[0]
+        heatmap = tf.reduce_sum(conv_output * weights, axis=-1)
+        heatmap = tf.maximum(heatmap, 0)
+        max_value = tf.reduce_max(heatmap)
 
-        # Global average pooling of gradients to get weights
-        # Shape: (batch_size, channels)
-        pooled_grads = tf.reduce_mean(grads, axis=(1, 2))
-
-        # Multiply each channel in the feature map by its corresponding weight
-        # conv_outputs shape: (batch_size, height, width, channels)
-        # pooled_grads shape: (batch_size, channels)
-        # We need to multiply each channel by its weight
-        pooled_grads = tf.expand_dims(pooled_grads, axis=1)
-        pooled_grads = tf.expand_dims(pooled_grads, axis=1)
-        # pooled_grads shape: (batch_size, 1, 1, channels)
-
-        # Weight the feature maps
-        weighted_outputs = conv_outputs * pooled_grads
-
-        # Sum across channels to get the heatmap
-        heatmap = tf.reduce_sum(weighted_outputs, axis=-1)
-
-        # Apply ReLU to focus on positive influences
-        heatmap = tf.nn.relu(heatmap)
-
-        # Normalize the heatmap to [0, 1]
-        heatmap_min = tf.reduce_min(heatmap)
-        heatmap_max = tf.reduce_max(heatmap)
-
-        if heatmap_max > heatmap_min:
-            heatmap = (heatmap - heatmap_min) / (heatmap_max - heatmap_min)
-        else:
-            # If all values are the same, set to zeros
-            heatmap = tf.zeros_like(heatmap)
-
-        # Remove batch dimension
-        heatmap = heatmap[0]
-
-        # Resize heatmap to original image size
-        heatmap = tf.image.resize(
-            tf.expand_dims(heatmap, axis=-1),
-            [original_height, original_width],
-            method='bilinear'
-        )
-        heatmap = tf.squeeze(heatmap, axis=-1)
-
-        # Convert to NumPy array
-        heatmap = heatmap.numpy()
-
-        return heatmap
+        if max_value > 0:
+            heatmap /= max_value
+            
+        heatmap = tf.image.resize(heatmap[...,None], (h,w))
+        heatmap = tf.squeeze(heatmap)
+        return heatmap.numpy()

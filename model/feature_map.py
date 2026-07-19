@@ -1,110 +1,125 @@
 """
 Feature map extraction module for TensorFlow/Keras models.
-
-This module provides the FeatureMapExtractor class for extracting
-intermediate feature maps from Keras models using the Functional API.
 """
 
 import numpy as np
 import tensorflow as tf
-from typing import List, Dict, Optional
+from typing import Dict, List
 
 
 class FeatureMapExtractor:
     """
-    A class for extracting feature maps from intermediate layers of a Keras model.
-
-    This class creates intermediate models using the Keras Functional API
-    to extract feature maps from specified layers.
-
-    Attributes:
-        model (tf.keras.Model): The Keras model to extract features from.
+    Extract intermediate feature maps from TensorFlow/Keras models.
     """
 
-    def __init__(self, model: tf.keras.Model) -> None:
-        """
-        Initialize the FeatureMapExtractor with a Keras model.
+    def __init__(self, model: tf.keras.Model):
 
-        Args:
-            model: A Keras model instance to extract features from.
-
-        Raises:
-            TypeError: If the provided model is not a Keras Model instance.
-        """
         if not isinstance(model, tf.keras.Model):
-            raise TypeError(
-                f"Expected model to be a tf.keras.Model instance, "
-                f"got {type(model).__name__}"
-            )
+            raise TypeError( f"Expected tf.keras.Model, got {type(model).__name__}" )
+
         self.model = model
+
+        # Extract all layers at once
+        self.feature_model = tf.keras.Model(
+            inputs=self.model.input,
+            outputs=[layer.output for layer in self.model.layers]
+        )
+
+        # Cache single layer models
+        self.layer_models = {}
 
     def list_layers(self) -> List[str]:
         """
-        List all layer names in the model.
-
-        Returns:
-            List[str]: A list of layer names in the model, in order.
+        Return all layer names.
         """
         return [layer.name for layer in self.model.layers]
 
-    def extract(self, image: np.ndarray, layer_name: str) -> np.ndarray:
+    def layer_info(self) -> List[dict]:
         """
-        Extract feature map from a specified layer.
+        Return layer information.
+        """
 
-        Args:
-            image: Input image as a NumPy array with shape (height, width, channels)
-                or (batch, height, width, channels).
-            layer_name: Name of the layer to extract features from.
+        info = []
+        for index, layer in enumerate(self.model.layers):
+            info.append(
+                {
+                    "index": index,
+                    "name": layer.name,
+                    "type": layer.__class__.__name__,
+                    "output_shape": layer.output.shape
+                }
+            )
+        return info
+
+    def show_layers(self):
+        """
+        Print all available layers.
+        """
+
+        print(
+            f"{'Index':<8}"
+            f"{'Layer Name':<35}"
+            f"{'Type':<25}"
+            f"Output Shape"
+        )
+        print("-" * 100)
+
+        for item in self.layer_info():
+            print(
+                f"{item['index']:<8}"
+                f"{item['name']:<35}"
+                f"{item['type']:<25}"
+                f"{item['output_shape']}"
+            )
+
+    def _validate_image( self, image: np.ndarray ):
+        if not isinstance(image, np.ndarray):
+            raise TypeError( "image must be numpy array" )
+        if image.ndim == 3:
+            image = np.expand_dims( image, axis=0 )
+        elif image.ndim != 4:
+            raise ValueError( f"Invalid image shape {image.shape}" )
+        return image
+
+    def extract(self, image: np.ndarray) -> Dict[str, np.ndarray]:
+        """
+        Extract all layer feature maps.
 
         Returns:
-            np.ndarray: Feature map as a NumPy array with batch dimension removed.
-                Shape will be (height, width, channels) or similar depending
-                on the layer output shape.
-
-        Raises:
-            TypeError: If image is not a NumPy array.
-            ValueError: If image has invalid shape or dimensions.
-            ValueError: If the specified layer name does not exist in the model.
+            {
+                layer_name: feature_map
+            }
         """
-        if not isinstance(image, np.ndarray):
-            raise TypeError(
-                f"Expected image to be a np.ndarray, got {type(image).__name__}"
-            )
+        image = self._validate_image( image )
+        outputs = self.feature_model.predict( image, verbose=0 )
+        feature_maps = {}
+        for layer, output in zip( self.model.layers, outputs ):
+            feature_maps[layer.name] = output[0]
+        return feature_maps
 
-        # Validate input dimensions
-        if image.ndim not in [3, 4]:
+
+
+    def extract_layer( self, image: np.ndarray, layer_name: str ) -> np.ndarray:
+        """
+        Extract feature map from one layer.
+        """
+        image = self._validate_image( image )
+
+        if layer_name not in self.list_layers():
+            raise ValueError( f"Layer '{layer_name}' not found" )
+        layer = self.model.get_layer( layer_name )
+        # Check feature map dimension
+        if len(layer.output.shape) != 4:
             raise ValueError(
-                f"Expected image to have 3 or 4 dimensions (HWC or BHWC), "
-                f"got {image.ndim} dimensions with shape {image.shape}"
+                f"Layer '{layer_name}' is not feature map layer. "
+                f"Output shape: {layer.output.shape}"
             )
 
-        # Check if layer exists
-        layer_names = self.list_layers()
-        if layer_name not in layer_names:
-            raise ValueError(
-                f"Layer '{layer_name}' not found in model. "
-                f"Available layers: {layer_names}"
-            )
-
-        # Add batch dimension if necessary
-        if image.ndim == 3:
-            image = np.expand_dims(image, axis=0)
-
-        # Create intermediate model using Functional API
-        try:
-            intermediate_model = tf.keras.Model(
+        # Create model once
+        if layer_name not in self.layer_models:
+            self.layer_models[layer_name] = tf.keras.Model(
                 inputs=self.model.input,
-                outputs=self.model.get_layer(layer_name).output
+                outputs=layer.output
             )
-        except ValueError as e:
-            raise ValueError(
-                f"Failed to create intermediate model for layer '{layer_name}': {e}"
-            )
-
-        # Extract feature map
-        feature_map = intermediate_model.predict(image, verbose=0)
-
-        # Remove batch dimension
-        feature_map = feature_map[0]
-
-        return feature_map
+        feature_map = self.layer_models[layer_name].predict( image, verbose=0 )
+        return feature_map[0]

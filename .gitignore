@@ -62,3 +62,6 @@ Thumbs.db
 
 #Report
 Report/
+
+#Model
+Resnet50_best/

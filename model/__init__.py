@@ -13,6 +13,5 @@ from .gradcam import GradCAM
 __all__ = [
     "Predictor",
     "FeatureMapExtractor",
-    "GradCAM",
-    "ModelSummary",
+    "GradCAM"
 ]
