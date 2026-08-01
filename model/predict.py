@@ -20,13 +20,14 @@ class Predictor:
             raise ValueError(f"Invalid image shape {image.shape}")
         return self.model.predict(image, verbose=0)
     
-    def predict_class(self, image: np.ndarray) -> Dict:
-        probabilities = self.predict(image)
-        probabilities = probabilities[0]
-        class_id = int(np.argmax(probabilities))
-        confidence = float(probabilities[class_id])
+    def predict_class(self, image: np.ndarray, threshold: float = 0.5) -> Dict:
+        probabilities = self.predict(image)[0]
+        probability_dr = probabilities[0]
+        class_id = 1 if probability_dr > threshold else 0
+        confidence = probability_dr if class_id == 1 else 1 - probability_dr
         return {
             "class_id": class_id,
             "confidence": confidence,
-            "probabilities": probabilities
+            "probabilities": probabilities,
+            "probability_dr": probability_dr
         }

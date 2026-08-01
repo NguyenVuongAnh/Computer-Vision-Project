@@ -11,7 +11,7 @@ from tensorflow.keras.layers import Input, GlobalAveragePooling2D, Dropout, Dens
 from tensorflow.keras.applications import ResNet50
 from tensorflow.keras.applications.resnet50 import preprocess_input
 
-from model import Predictor, FeatureMapExtractor, GradCAM
+from model import Predictor, FeatureMapExtractor, GradCAM, image_processing
 from style import inject_style, THEMES
 
 NUM_CLASSES = 2
@@ -195,12 +195,13 @@ with st.container(key="workstation"):
             )
         else:
             original_image = Image.open(uploaded_file).convert("RGB").resize((IMG_SIZE, IMG_SIZE))
-            image_array = np.array(original_image, dtype=np.float32)
+            image_array = np.array(original_image, dtype=np.uint8)
+            processed = image_processing.preprocess_fundus_adaptive(image_array, target_size=256, apply_graham=True)
             model_input = preprocess_input(image_array.copy())
 
             result = predictor.predict_class(model_input)
             predicted_class = result["class_id"]
-            probs = result["probabilities"]
+            probability_dr = result["probability_dr"]
 
             tab_predict, tab_features, tab_gradcam, tab_summary = st.tabs(
                 ["Dự đoán", "Bản đồ đặc trưng", "Grad-CAM", "Tổng quan mô hình"]
@@ -374,7 +375,8 @@ with st.container(key="workstation"):
 
                 axes[2].imshow(image_array.astype("uint8"))
                 axes[2].imshow(heatmap, cmap="jet", alpha=0.4)
-                axes[2].set_title(f"Overlay - {CLASS_NAMES[target_class]}")
+                # axes[2].set_title(f"Overlay - {CLASS_NAMES[target_class]}")
+                axes[2].set_title(f"Overlay")
                 axes[2].axis("off")
 
                 st.pyplot(fig)
